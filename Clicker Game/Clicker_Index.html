@@ -1,0 +1,75 @@
+
+<!DOCTYPE html>
+<html lang="en" data-theme="system">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clicker Game</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    
+<button id="settingsButton" class="settings-button" type="button" aria-label="Open settings">⚙️</button>
+
+<div id="settingsOverlay" class="settings-overlay" hidden>
+    <section class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+        <div class="settings-header">
+            <h2 id="settingsTitle">⚙️ Settings</h2>
+            <button id="closeSettings" type="button" aria-label="Close settings">✕</button>
+        </div>
+
+        <div class="setting-group">
+            <label for="themeSelect">Appearance</label>
+            <p>Choose your preferred theme.</p>
+
+            <select id="themeSelect">
+                <option value="system">System default</option>
+                <option value="dark">Dark mode</option>
+                <option value="light">Light mode</option>
+            </select>
+        </div>
+    </section>
+</div>
+
+    <h1>Clicker Game</h1>
+
+    <button id="themeToggle" type="button">Theme: System</button>
+
+    <p>Coins: <span id="coins">0</span></p>
+
+    <button id="clickButton" class="coin-circle">🪙</button>
+
+    <p>Coins per click: <span id="coinPerClick">1</span></p>
+
+    <button id="upgradeButton">Buy Upgrade — Cost: 10 coins</button>
+    <br>
+    <button id="autoClickerButton">Buy AutoClicker - Cost: 50 coins</button>
+    <br>
+    <button id="crazyButtonBoost">Boost Button</button>
+
+    <div class="boost-upgrades">
+        <h2>Crazy Boost Upgrades</h2>
+
+        <button id="BoostUpgrade1">Upgrade to 3x — 250 coins</button>
+        <button id="BoostUpgrade2">Upgrade to 4x — 1,000 coins</button>
+        <button id="BoostUpgrade3">Upgrade to 5x — 4,000 coins</button>
+        <button id="BoostUpgrade4">Upgrade to 6x — 15,000 coins</button>
+        <button id="BoostUpgrade5">Upgrade to 7x — 50,000 coins</button>
+        <button id="BoostUpgrade6">Upgrade to 8x — 150,000 coins</button>
+    </div>
+
+    <section id="missions">
+        <h2>Beginner Missions</h2>
+        <p id="missionDescription">Complete missions to earn coins!</p>
+
+        <div id="beginnerMissions"></div>
+        <div id="intermediateMissions" style="display: none;"></div>
+        <div id="hardMissions" style="display: none;"></div>
+    </section>
+
+    <p id="message"></p>
+
+    <script src="basics.js"></script>
+</body>
+</html>
