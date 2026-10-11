@@ -1,4 +1,7 @@
 
+"use strict";
+
+// Game state
 let coins = 0;
 let CoinPerClick = 1;
 let UpgradeCost = 50;
@@ -7,9 +10,14 @@ let autoclickerspeed = 1000;
 let BoostMultiplier = 2;
 let playerclick = 0;
 let maxCoinsEarned = 0;
+let totalCoinsEarned = 0;
+
 let crazyboost = false;
 let crazyBoostEndTime = 0;
-let crazyBoostDuration = 10000;
+let crazyBoostCooldownEndTime = 0;
+const crazyBoostDuration = 60000;
+const crazyBoostCooldownDuration = 600000;
+
 let tenXBoostUnlocked = false;
 let upgradeDiscountActive = false;
 let permanentClickBonus = false;
@@ -18,11 +26,16 @@ let offlineMultiplier = 2;
 let totalOfflineEarned = 0;
 let lastOnlineTime = Date.now();
 let autoClickerTimer = null;
-let boostTimer = null;
+let boostDisplayTimer = null;
+let saveTimer = null;
+let claimedMissions = {};
+let offlineRewardMessage = "";
 
+// Boost upgrade prices and multipliers
 const boostCosts = [250, 1000, 4000, 15000, 50000, 150000, 300000];
 const boostMultipliers = [3, 4, 5, 6, 7, 8, 10];
 
+// Beginner missions
 const beginnerMissions = [
     {
         id: "firstClick",
@@ -50,6 +63,7 @@ const beginnerMissions = [
     }
 ];
 
+// Intermediate missions
 const intermediateMissions = [
     {
         id: "clickMaster",
@@ -85,6 +99,7 @@ const intermediateMissions = [
     }
 ];
 
+// Hard missions
 const hardMissions = [
     {
         id: "clickingLegend",
@@ -144,9 +159,7 @@ const hardMissions = [
     }
 ];
 
-let claimedMissions = {};
-let offlineRewardMessage = "";
-
+// General helper functions
 function getElement(id) {
     return document.getElementById(id);
 }
@@ -163,6 +176,18 @@ function showMessage(message) {
     setText("message", message);
 }
 
+function formatNumber(value) {
+    return Math.floor(Number(value) || 0).toLocaleString();
+}
+
+function formatTime(milliseconds) {
+    const totalSeconds = Math.ceil(Math.max(0, milliseconds) / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+
+    return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
 function updateMaxCoins() {
     maxCoinsEarned = Math.max(maxCoinsEarned, coins);
 }
@@ -173,52 +198,97 @@ function getUpgradeCost() {
         : UpgradeCost;
 }
 
+function getAutoClickerCost() {
+    return Math.floor(100 * Math.pow(1.5, autoclickersowned));
+}
+
 function getOfflineMultiplier() {
     return offlineMultiplier;
 }
 
+// Boost timer calculations use timestamps to avoid countdown drift
+function getBoostRemaining() {
+    return crazyboost
+        ? Math.max(0, crazyBoostEndTime - Date.now())
+        : 0;
+}
+
+function getCooldownRemaining() {
+    return !crazyboost
+        ? Math.max(0, crazyBoostCooldownEndTime - Date.now())
+        : 0;
+}
+
+// Update the game display
 function updateDisplay() {
     updateMaxCoins();
 
-    setText("coins", Math.floor(coins).toLocaleString());
-    setText("coinPerClick", CoinPerClick.toLocaleString());
+    setText("coins", formatNumber(coins));
+    setText("coinPerClick", formatNumber(CoinPerClick));
 
     const upgradeButton = getElement("upgradeButton");
 
     if (upgradeButton) {
         upgradeButton.textContent =
-            `Upgrade Click (+1) - ${getUpgradeCost().toLocaleString()} coins`;
+            `Upgrade Click (+1) - ${formatNumber(getUpgradeCost())} coins`;
+        upgradeButton.disabled = coins < getUpgradeCost();
     }
 
     const autoButton = getElement("autoClickerButton");
 
     if (autoButton) {
         autoButton.textContent =
-            `Buy Auto-Clicker - ${getAutoClickerCost().toLocaleString()} coins`;
+            `Buy Auto-Clicker - ${formatNumber(getAutoClickerCost())} coins`;
+        autoButton.disabled = coins < getAutoClickerCost();
     }
 
-    const crazyButton = getElement("crazyButtonBoost");
-
-    if (crazyButton) {
-        crazyButton.textContent = crazyboost
-            ? `Crazy Boost ACTIVE (${BoostMultiplier}×)`
-            : `Crazy Boost (${BoostMultiplier}×)`;
-    }
-
+    updateBoostButton();
     updateBoostUpgrades();
 }
 
-function getAutoClickerCost() {
-    return Math.floor(100 * Math.pow(1.5, autoclickersowned));
+// Display Boost duration and cooldown
+function updateBoostButton() {
+    const button = getElement("crazyButtonBoost");
+
+    if (!button) return;
+
+    if (crazyboost) {
+        button.textContent =
+            `Crazy Boost ACTIVE (${BoostMultiplier}×) — ${formatTime(getBoostRemaining())}`;
+        button.disabled = true;
+    } else {
+        const cooldown = getCooldownRemaining();
+
+        if (cooldown > 0) {
+            button.textContent =
+                `Crazy Boost (${BoostMultiplier}×) — Cooldown ${formatTime(cooldown)}`;
+            button.disabled = true;
+        } else {
+            button.textContent = `Crazy Boost (${BoostMultiplier}×)`;
+            button.disabled = false;
+        }
+    }
 }
 
-function earnCoins(amount) {
+// Add coins and update progress
+function earnCoins(amount, isOffline = false) {
+    amount = Math.max(0, Number(amount) || 0);
+
+    if (amount <= 0) return;
+
     coins += amount;
+    totalCoinsEarned += amount;
+
+    if (isOffline) {
+        totalOfflineEarned += amount;
+    }
+
     updateMaxCoins();
     updateDisplay();
     updateMissions();
 }
 
+// Handle manual clicks
 function handleClick() {
     playerclick++;
 
@@ -226,6 +296,7 @@ function handleClick() {
     earnCoins(CoinPerClick * multiplier);
 }
 
+// Purchase a click upgrade
 function upgradeClick() {
     const cost = getUpgradeCost();
 
@@ -241,10 +312,10 @@ function upgradeClick() {
     updateDisplay();
     updateMissions();
     saveGame();
-
     showMessage("Click power upgraded!");
 }
 
+// Purchase an auto-clicker
 function buyAutoClicker() {
     const cost = getAutoClickerCost();
 
@@ -255,7 +326,6 @@ function buyAutoClicker() {
 
     coins -= cost;
     autoclickersowned++;
-
     autoclickerspeed = Math.max(100, 1000 - autoclickersowned * 25);
 
     startAutoClickerTimer();
@@ -266,89 +336,100 @@ function buyAutoClicker() {
     showMessage("Auto-clicker purchased!");
 }
 
+// Restart the auto-clicker interval whenever its speed changes
 function startAutoClickerTimer() {
-    if (autoClickerTimer) {
+    if (autoClickerTimer !== null) {
         clearInterval(autoClickerTimer);
+        autoClickerTimer = null;
     }
 
-    if (autoclickersowned <= 0) {
-        autoClickerTimer = null;
-        return;
-    }
+    if (autoclickersowned <= 0) return;
 
     autoClickerTimer = setInterval(() => {
-        if (autoclickersowned <= 0) {
-            return;
-        }
-
         const multiplier = crazyboost ? BoostMultiplier : 1;
         earnCoins(autoclickersowned * multiplier);
-    }, autoclickerspeed);
+    }, Math.max(100, autoclickerspeed));
 }
 
+// End expired Boosts and establish their cooldown
+function normalizeBoostState() {
+    const now = Date.now();
+
+    if (crazyboost && crazyBoostEndTime <= now) {
+        crazyboost = false;
+        crazyBoostCooldownEndTime =
+            crazyBoostEndTime + crazyBoostCooldownDuration;
+        crazyBoostEndTime = 0;
+
+        if (crazyBoostCooldownEndTime <= now) {
+            crazyBoostCooldownEndTime = 0;
+        }
+
+        showMessage("Crazy Boost ended! The 10-minute cooldown has started.");
+        saveGame();
+    }
+
+    if (!crazyboost && crazyBoostCooldownEndTime <= now) {
+        crazyBoostCooldownEndTime = 0;
+    }
+}
+
+// Activate Boost if it is available
 function activateCrazyBoost() {
+    normalizeBoostState();
+
     if (crazyboost) {
         showMessage("Crazy Boost is already active!");
         return;
     }
 
+    if (getCooldownRemaining() > 0) {
+        showMessage(
+            `Crazy Boost is on cooldown for ${formatTime(getCooldownRemaining())}.`
+        );
+        updateBoostButton();
+        return;
+    }
+
     crazyboost = true;
     crazyBoostEndTime = Date.now() + crazyBoostDuration;
+    crazyBoostCooldownEndTime = 0;
 
     updateDisplay();
     updateMissions();
-    restoreBoostTimer();
-
-    showMessage(`${BoostMultiplier}× Crazy Boost activated!`);
     saveGame();
+
+    showMessage(`${BoostMultiplier}× Crazy Boost activated for 60 seconds!`);
 }
 
+// Refresh the timer display without counting down inaccurately
 function restoreBoostTimer() {
-    if (boostTimer) {
-        clearTimeout(boostTimer);
-        boostTimer = null;
+    if (boostDisplayTimer !== null) {
+        clearInterval(boostDisplayTimer);
     }
 
-    if (!crazyboost) {
-        updateDisplay();
-        return;
-    }
+    boostDisplayTimer = setInterval(() => {
+        normalizeBoostState();
+        updateBoostButton();
+    }, 250);
 
-    const remaining = crazyBoostEndTime - Date.now();
-
-    if (remaining <= 0) {
-        crazyboost = false;
-        crazyBoostEndTime = 0;
-        updateDisplay();
-        saveGame();
-        return;
-    }
-
-    boostTimer = setTimeout(() => {
-        crazyboost = false;
-        crazyBoostEndTime = 0;
-
-        updateDisplay();
-        updateMissions();
-        saveGame();
-
-        showMessage("Crazy Boost has ended!");
-    }, remaining);
+    normalizeBoostState();
+    updateBoostButton();
 }
 
+// Purchase a Boost multiplier upgrade
 function buyBoostUpgrade(level) {
     const index = level - 1;
-    const cost = boostCosts[index];
-    const nextMultiplier = boostMultipliers[index];
+
+    if (index < 0 || index >= boostCosts.length) return;
 
     if (level === 7 && !tenXBoostUnlocked) {
         showMessage("Complete Boost Master to unlock the 10× upgrade!");
         return;
     }
 
-    if (index < 0 || index >= boostCosts.length) {
-        return;
-    }
+    const cost = boostCosts[index];
+    const nextMultiplier = boostMultipliers[index];
 
     if (BoostMultiplier >= nextMultiplier) {
         showMessage("You already have this boost level!");
@@ -370,76 +451,59 @@ function buyBoostUpgrade(level) {
     showMessage(`Crazy Boost upgraded to ${BoostMultiplier}×!`);
 }
 
+// Create the final Boost upgrade button if necessary
 function ensureTenXUpgradeButton() {
-    const existing = getElement("BoostUpgrade7");
+    let button = getElement("BoostUpgrade7");
 
-    if (existing) {
-        existing.style.display = tenXBoostUnlocked ? "" : "none";
-        existing.onclick = () => buyBoostUpgrade(7);
-        return;
+    if (!button) {
+        const sixthButton = getElement("BoostUpgrade6");
+
+        if (!sixthButton || !sixthButton.parentElement) return;
+
+        button = document.createElement("button");
+        button.id = "BoostUpgrade7";
+        sixthButton.insertAdjacentElement("afterend", button);
     }
 
-    const sixthButton = getElement("BoostUpgrade6");
-
-    if (!sixthButton || !sixthButton.parentElement) {
-        return;
-    }
-
-    const button = document.createElement("button");
-
-    button.id = "BoostUpgrade7";
     button.textContent = "Upgrade Crazy Boost to 10× - 300,000 coins";
     button.style.display = tenXBoostUnlocked ? "" : "none";
+    button.disabled = BoostMultiplier >= 10 || coins < boostCosts[6];
     button.onclick = () => buyBoostUpgrade(7);
-
-    sixthButton.insertAdjacentElement("afterend", button);
 }
 
+// Update all Boost upgrade buttons
 function updateBoostUpgrades() {
     for (let level = 1; level <= 6; level++) {
         const button = getElement(`BoostUpgrade${level}`);
 
-        if (!button) {
-            continue;
-        }
+        if (!button) continue;
 
         const multiplier = boostMultipliers[level - 1];
         const cost = boostCosts[level - 1];
 
         button.textContent =
-            `Upgrade Crazy Boost to ${multiplier}× - ${cost.toLocaleString()} coins`;
+            `Upgrade Crazy Boost to ${multiplier}× - ${formatNumber(cost)} coins`;
 
-        button.disabled = BoostMultiplier >= multiplier;
+        button.disabled =
+            BoostMultiplier >= multiplier || coins < cost;
     }
 
     ensureTenXUpgradeButton();
-
-    const finalButton = getElement("BoostUpgrade7");
-
-    if (finalButton) {
-        finalButton.textContent =
-            "Upgrade Crazy Boost to 10× - 300,000 coins";
-        finalButton.disabled = BoostMultiplier >= 10;
-    }
 }
 
+// Calculate mission progress
 function getMissionProgress(mission) {
     switch (mission.type) {
         case "clicks":
             return playerclick;
-
         case "coins":
-            return maxCoinsEarned;
-
+            return totalCoinsEarned;
         case "auto":
             return autoclickersowned;
-
         case "boost":
             return BoostMultiplier;
-
         case "offline":
             return totalOfflineEarned;
-
         default:
             return 0;
     }
@@ -457,10 +521,9 @@ function intermediateMissionsCompleted() {
     return intermediateMissions.every(mission => claimedMissions[mission.id]);
 }
 
+// Render a group of mission cards
 function renderMissionGroup(missions, container) {
-    if (!container) {
-        return;
-    }
+    if (!container) return;
 
     container.innerHTML = "";
 
@@ -484,13 +547,12 @@ function renderMissionGroup(missions, container) {
 
         const progressText = document.createElement("p");
         progressText.textContent =
-            `Progress: ${Math.floor(progress).toLocaleString()} / ${mission.target.toLocaleString()}`;
+            `Progress: ${formatNumber(progress)} / ${formatNumber(mission.target)}`;
 
         const rewardText = document.createElement("p");
-        rewardText.textContent =
-            typeof mission.reward === "number"
-                ? `Reward: ${mission.reward.toLocaleString()} coins`
-                : `Reward: ${mission.reward}`;
+        rewardText.textContent = typeof mission.reward === "number"
+            ? `Reward: ${formatNumber(mission.reward)} coins`
+            : `Reward: ${mission.reward}`;
 
         const progressBar = document.createElement("progress");
         progressBar.max = mission.target;
@@ -522,6 +584,7 @@ function renderMissionGroup(missions, container) {
     }
 }
 
+// Display the currently available mission group
 function renderMissions() {
     const beginnerContainer = getElement("beginnerMissions");
     const intermediateContainer = getElement("intermediateMissions");
@@ -546,13 +609,11 @@ function renderMissions() {
     }
 
     if (description) {
-        if (!beginnerComplete) {
-            description.textContent = "Beginner Missions";
-        } else if (!intermediateComplete) {
-            description.textContent = "Intermediate Missions";
-        } else {
-            description.textContent = "Hard Missions";
-        }
+        description.textContent = !beginnerComplete
+            ? "Beginner Missions"
+            : !intermediateComplete
+                ? "Intermediate Missions"
+                : "Hard Missions";
     }
 
     renderMissionGroup(beginnerMissions, beginnerContainer);
@@ -560,12 +621,19 @@ function renderMissions() {
     renderMissionGroup(hardMissions, hardContainer);
 }
 
+function updateMissions() {
+    renderMissions();
+}
+
+// Claim a completed mission
 function claimMission(id) {
-    const mission = [
+    const allMissions = [
         ...beginnerMissions,
         ...intermediateMissions,
         ...hardMissions
-    ].find(item => item.id === id);
+    ];
+
+    const mission = allMissions.find(item => item.id === id);
 
     if (!mission || claimedMissions[id] || !isMissionComplete(mission)) {
         return;
@@ -575,6 +643,7 @@ function claimMission(id) {
 
     if (typeof mission.reward === "number") {
         coins += mission.reward;
+        totalCoinsEarned += mission.reward;
         updateMaxCoins();
     }
 
@@ -617,10 +686,7 @@ function claimMission(id) {
     showMessage(`${mission.name} completed! Reward claimed.`);
 }
 
-function updateMissions() {
-    renderMissions();
-}
-
+// Calculate offline earnings
 function calculateOfflineEarnings() {
     const now = Date.now();
     const previousTime = Number(lastOnlineTime) || now;
@@ -637,25 +703,26 @@ function calculateOfflineEarnings() {
     }
 
     const ticksAway = secondsAway * (1000 / autoclickerspeed);
-    const baseEarnings = autoclickersowned * ticksAway;
-    const earnings = Math.floor(baseEarnings * getOfflineMultiplier());
+    const earnings = Math.floor(
+        autoclickersowned * ticksAway * getOfflineMultiplier()
+    );
 
-    if (earnings <= 0) {
-        return 0;
-    }
+    if (earnings <= 0) return 0;
 
     coins += earnings;
+    totalCoinsEarned += earnings;
     totalOfflineEarned += earnings;
     updateMaxCoins();
 
     offlineRewardMessage =
-        `Welcome back! You earned ${earnings.toLocaleString()} coins offline at ${offlineMultiplier}×.`;
+        `Welcome back! You earned ${formatNumber(earnings)} coins offline at ${offlineMultiplier}×.`;
 
     return earnings;
 }
 
+// Save all persistent game data
 function saveGame() {
-    lastOnlineTime = Date.now();
+    const now = Date.now();
 
     const data = {
         coins,
@@ -666,72 +733,83 @@ function saveGame() {
         BoostMultiplier,
         playerclick,
         maxCoinsEarned,
+        totalCoinsEarned,
         crazyboost,
         crazyBoostEndTime,
+        crazyBoostCooldownEndTime,
         tenXBoostUnlocked,
         upgradeDiscountActive,
         permanentClickBonus,
         freeAutoClickersClaimed,
         offlineMultiplier,
         totalOfflineEarned,
-        lastOnlineTime,
+        lastOnlineTime: now,
         claimedMissions
     };
 
     try {
         localStorage.setItem("clickerGameSave", JSON.stringify(data));
+        lastOnlineTime = now;
     } catch (error) {
         console.error("Could not save game:", error);
     }
 }
 
+// Load previously saved game data
 function loadGame() {
-    let data;
+    let data = null;
 
     try {
         const savedData = localStorage.getItem("clickerGameSave");
         data = savedData ? JSON.parse(savedData) : null;
     } catch (error) {
         console.error("Could not load saved game:", error);
-        data = null;
     }
 
-    if (data) {
-        coins = Number(data.coins) || 0;
-        CoinPerClick = Number(data.CoinPerClick) || 1;
-        UpgradeCost = Number(data.UpgradeCost) || 50;
-        autoclickersowned = Number(data.autoclickersowned) || 0;
-        autoclickerspeed = Number(data.autoclickerspeed) || 1000;
-        BoostMultiplier = Number(data.BoostMultiplier) || 2;
-        playerclick = Number(data.playerclick) || 0;
-        maxCoinsEarned = Number(data.maxCoinsEarned) || coins;
+    if (data && typeof data === "object") {
+        coins = Math.max(0, Number(data.coins) || 0);
+        CoinPerClick = Math.max(1, Number(data.CoinPerClick) || 1);
+        UpgradeCost = Math.max(50, Number(data.UpgradeCost) || 50);
+        autoclickersowned = Math.max(0, Number(data.autoclickersowned) || 0);
+        autoclickerspeed = Math.max(100, Number(data.autoclickerspeed) || 1000);
+        BoostMultiplier = Math.max(2, Number(data.BoostMultiplier) || 2);
+        playerclick = Math.max(0, Number(data.playerclick) || 0);
+        maxCoinsEarned = Math.max(Number(data.maxCoinsEarned) || 0, coins);
+        totalCoinsEarned = Math.max(
+            Number(data.totalCoinsEarned) || 0,
+            maxCoinsEarned
+        );
 
         crazyboost = Boolean(data.crazyboost);
-        crazyBoostEndTime = Number(data.crazyBoostEndTime) || 0;
+        crazyBoostEndTime = Math.max(0, Number(data.crazyBoostEndTime) || 0);
+        crazyBoostCooldownEndTime = Math.max(
+            0,
+            Number(data.crazyBoostCooldownEndTime) || 0
+        );
 
         tenXBoostUnlocked = Boolean(data.tenXBoostUnlocked);
         upgradeDiscountActive = Boolean(data.upgradeDiscountActive);
         permanentClickBonus = Boolean(data.permanentClickBonus);
         freeAutoClickersClaimed = Boolean(data.freeAutoClickersClaimed);
 
-        offlineMultiplier = Number(data.offlineMultiplier) || 2;
-        totalOfflineEarned = Number(data.totalOfflineEarned) || 0;
-
-        lastOnlineTime = Number(data.lastOnlineTime) || Date.now();
+        offlineMultiplier = Math.max(2, Number(data.offlineMultiplier) || 2);
+        totalOfflineEarned = Math.max(0, Number(data.totalOfflineEarned) || 0);
+        lastOnlineTime = Math.max(0, Number(data.lastOnlineTime) || Date.now());
 
         claimedMissions =
             data.claimedMissions && typeof data.claimedMissions === "object"
                 ? data.claimedMissions
                 : {};
+    } else {
+        lastOnlineTime = Date.now();
     }
 
     calculateOfflineEarnings();
-
+    normalizeBoostState();
     updateMaxCoins();
-    updateDisplay();
-    updateMissions();
 }
 
+// Initialize buttons
 function initializeButtons() {
     const clickButton = getElement("clickButton");
 
@@ -745,16 +823,16 @@ function initializeButtons() {
         upgradeButton.addEventListener("click", upgradeClick);
     }
 
-    const autoClickerButton = getElement("autoClickerButton");
+    const autoButton = getElement("autoClickerButton");
 
-    if (autoClickerButton) {
-        autoClickerButton.addEventListener("click", buyAutoClicker);
+    if (autoButton) {
+        autoButton.addEventListener("click", buyAutoClicker);
     }
 
-    const crazyButton = getElement("crazyButtonBoost");
+    const boostButton = getElement("crazyButtonBoost");
 
-    if (crazyButton) {
-        crazyButton.addEventListener("click", activateCrazyBoost);
+    if (boostButton) {
+        boostButton.addEventListener("click", activateCrazyBoost);
     }
 
     for (let level = 1; level <= 6; level++) {
@@ -768,28 +846,13 @@ function initializeButtons() {
     ensureTenXUpgradeButton();
 }
 
-loadGame();
-initializeButtons();
-restoreBoostTimer();
-startAutoClickerTimer();
-updateDisplay();
-updateMissions();
-
-if (offlineRewardMessage) {
-    showMessage(offlineRewardMessage);
-}
-
-setInterval(saveGame, 1000);
-
-window.addEventListener("beforeunload", saveGame);
-
-
+// Initialize theme settings
 function initializeSettings() {
     const root = document.documentElement;
-    const settingsButton = document.getElementById("settingsButton");
-    const overlay = document.getElementById("settingsOverlay");
-    const closeButton = document.getElementById("closeSettings");
-    const themeSelect = document.getElementById("themeSelect");
+    const settingsButton = getElement("settingsButton");
+    const overlay = getElement("settingsOverlay");
+    const closeButton = getElement("closeSettings");
+    const themeSelect = getElement("themeSelect");
 
     if (!settingsButton || !overlay || !closeButton || !themeSelect) {
         return;
@@ -803,7 +866,7 @@ function initializeSettings() {
                 return saved;
             }
         } catch (error) {
-            console.warn("Could not load theme preference.");
+            console.warn("Could not load theme preference.", error);
         }
 
         return "system";
@@ -826,7 +889,7 @@ function initializeSettings() {
             try {
                 localStorage.setItem("clickerGameTheme", theme);
             } catch (error) {
-                console.warn("Could not save theme preference.");
+                console.warn("Could not save theme preference.", error);
             }
         }
     }
@@ -863,4 +926,35 @@ function initializeSettings() {
     applyTheme(readTheme(), false);
 }
 
-initializeSettings();
+// Start the game
+function initializeGame() {
+    loadGame();
+    initializeButtons();
+    initializeSettings();
+    restoreBoostTimer();
+    startAutoClickerTimer();
+    updateDisplay();
+    updateMissions();
+
+    if (offlineRewardMessage) {
+        showMessage(offlineRewardMessage);
+    }
+
+    saveTimer = setInterval(saveGame, 5000);
+
+    window.addEventListener("beforeunload", saveGame);
+
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+            normalizeBoostState();
+            updateDisplay();
+            updateMissions();
+        }
+    });
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initializeGame, { once: true });
+} else {
+    initializeGame();
+}
